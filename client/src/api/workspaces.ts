@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_URL = "http://localhost:8000";
+const API_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 
 export interface Workspace {
   id: number;
