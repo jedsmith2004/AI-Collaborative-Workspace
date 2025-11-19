@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Optional
 
 import asyncio
 import socketio
@@ -14,12 +15,11 @@ sio = socketio.AsyncServer(
 
 redis = get_redis_connection()
 
-_pending_save_tasks: dict[int, asyncio.Task] = {}
-_latest_note_contents: dict[int, dict] = {}
-_save_lock = asyncio.Lock()
+pending_saves = {}
+unsaved_changes = {}
 _user_rooms: dict[str, str] = {}
 
-def _serialise_note_db(note:Note):
+def _serialise_note_db(note: Note):
     return {
         "id": note.id,
         "title": note.title,
@@ -29,30 +29,36 @@ def _serialise_note_db(note:Note):
         "updated_at": note.updated_at.isoformat() if note.updated_at else None,
     }
 
-async def _debounced_save(note_id: int, workspace_room: str, delay: float = 1.0):
+async def _debounced_save(note_id: int, workspace_room: str, delay: float = 1.0, initiating_sid: Optional[str] = None):
     try:
         await asyncio.sleep(delay)
-        async with asyncio.Lock():
-            payload = _latest_note_contents.get(note_id)
-            if not payload:
-                return
-            with SessionLocal() as db:
-                note = db.query(Note).filter(Note.id == note_id, Note.workspace_id == _coerce_workspace_id(payload.get("workspace_id"))).first()
-                if not note:
-                    return
-                if "content" in payload and payload["content"] is not None:
-                    note.content = payload["content"]
-                if "title" in payload and payload["title"] is not None:
-                    note.title = payload["title"]
-                db.commit()
-                db.refresh(note)
+        payload = unsaved_changes.get(note_id)
+        if not payload:
+            return
 
-                await sio.emit("note_updated", _serialise_note_db(note), room=workspace_room)
+        with SessionLocal() as db:
+            note = db.query(Note).filter(
+                Note.id == note_id,
+                Note.workspace_id == _coerce_workspace_id(payload.get("workspace_id"))
+            ).first()
+
+            if not note:
+                return
+
+            if "content" in payload and payload["content"] is not None:
+                note.content = payload["content"]
+            if "title" in payload and payload["title"] is not None:
+                note.title = payload["title"]
+
+            db.commit()
+            db.refresh(note)
+            await sio.emit("note_updated", _serialise_note_db(note), room=workspace_room, skip_sid=initiating_sid)
+
     except asyncio.CancelledError:
-        return
+        pass
     finally:
-        _pending_save_tasks.pop(note_id, None)
-        _latest_note_contents.pop(note_id, None)
+        pending_saves.pop(note_id, None)
+        unsaved_changes.pop(note_id, None)
 
 
 def _coerce_workspace_id(raw_id):
@@ -263,17 +269,17 @@ async def note_live_update(sid, data):
     )
 
     # store latest content
-    _latest_note_contents[note_id] = {
+    unsaved_changes[note_id] = {
         "content": content,
         "title": title,
         "workspace_id": workspace_id_raw,
     }
 
     # cancel existing pending save and schedule a new one
-    task = _pending_save_tasks.get(note_id)
+    task = pending_saves.get(note_id)
     if task and not task.done():
         task.cancel()
-    _pending_save_tasks[note_id] = asyncio.create_task(_debounced_save(note_id, workspace_room, delay=1.0))
+    pending_saves[note_id] = asyncio.create_task(_debounced_save(note_id, workspace_room, delay=1.0, initiating_sid=sid))
 
 @sio.event
 async def cursor_update(sid, data):

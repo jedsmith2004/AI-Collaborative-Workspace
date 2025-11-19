@@ -24,12 +24,14 @@ class SocketService {
   private socket: Socket | null = null;
   private workspaceId: string | null = null;
 
-  connect(url: string = 'http://localhost:8000') {
+  connect(url?: string) {
     if (this.socket) {
       return this.socket;
     }
 
-    this.socket = io(url, {
+    const backendUrl = url || import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+
+    this.socket = io(backendUrl, {
       transports: ['websocket'],
       autoConnect: true,
     });

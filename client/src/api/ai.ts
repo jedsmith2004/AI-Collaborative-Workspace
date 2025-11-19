@@ -11,6 +11,22 @@ interface ChatRequest {
   message: string;
   workspace_id: number;
   conversation_history: ChatMessage[];
+  use_rag?: boolean;
+}
+
+interface NoteSource {
+  note_id: number;
+  title: string;
+  content: string;
+  similarity: number;
+  created_at: string | null;
+}
+
+interface Citation {
+    note_id: number;
+    title: string;
+    position: number;
+    match_text: string;
 }
 
 interface ChatResponse {
@@ -21,9 +37,13 @@ interface ChatResponse {
     completion_tokens: number;
     total_tokens: number;
   };
+  sources?: NoteSource[];
+  citations?: Citation[];
 }
 
 export async function sendAIMessage(request: ChatRequest): Promise<ChatResponse> {
   const response = await axios.post<ChatResponse>(`${API_URL}/ai/chat`, request);
   return response.data;
 }
+
+export type { ChatMessage, ChatRequest, ChatResponse, NoteSource, Citation };
