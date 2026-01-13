@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Home, UserPlus, Menu, ChevronRight, Crown, Edit3, Eye } from 'lucide-react';
-import type { Note } from '../../services/socket';
 import type { Collaborator } from '../../api/auth';
 import InviteCollaboratorModal from '../Collaborators/InviteCollaboratorModal';
 
@@ -11,7 +10,6 @@ interface WorkspaceHeaderProps {
   workspaceId: string;
   workspaceTitle: string;
   socketId: string | null;
-  selectedNote: Note | null;
   collaborators: Collaborator[];
   isOwner: boolean;
   onCollaboratorsChange: () => void;
@@ -35,7 +33,6 @@ const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   workspaceId,
   workspaceTitle,
   socketId,
-  selectedNote,
   collaborators,
   isOwner,
   onCollaboratorsChange,

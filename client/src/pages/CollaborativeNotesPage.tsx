@@ -384,7 +384,6 @@ export default function CollaborativeNotesPage() {
           workspaceId={workspaceId || ''}
           workspaceTitle={workspaceTitle}
           socketId={socketId}
-          selectedNote={selectedNote}
           collaborators={collaborators}
           isOwner={isOwner}
           onCollaboratorsChange={handleRefreshCollaborators}
