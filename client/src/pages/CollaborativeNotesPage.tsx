@@ -401,6 +401,8 @@ export default function CollaborativeNotesPage() {
             handleUpdateContent={handleUpdateContent}
             handleCursorMove={handleCursorMove}
             remoteCursors={remoteCursors}
+            apiUrl={import.meta.env.VITE_BACKEND_URL || "http://localhost:8000"}
+            token={token || ''}
           />
 
           {/* Chat / AI panel */}

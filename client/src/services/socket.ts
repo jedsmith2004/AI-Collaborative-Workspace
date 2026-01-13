@@ -7,6 +7,11 @@ interface Note {
   workspace_id?: string;
   created_at: string;
   updated_at: string;
+  // File attachment fields
+  file_name?: string | null;
+  file_type?: string | null;
+  file_size?: number | null;
+  is_document?: boolean;
 }
 
 interface ChatMessage {

@@ -5,7 +5,7 @@ from typing import Optional, Union
 from datetime import datetime
 
 print("1. Importing FastAPI...", flush=True)
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Query
 print("2. FastAPI imported. Importing CORS...", flush=True)
 from fastapi.middleware.cors import CORSMiddleware
 print("3. Importing SQLAlchemy...", flush=True)
@@ -19,7 +19,8 @@ from services.auth import (
     get_current_user, 
     get_current_user_optional,
     check_workspace_permission,
-    get_user_workspaces
+    get_user_workspaces,
+    verify_token
 )
 print("7. Importing models...", flush=True)
 from models.note import Note
@@ -353,6 +354,18 @@ def extract_text_from_document(content: bytes, ext: str) -> str:
         raise HTTPException(status_code=400, detail=f"Unsupported document type: {ext}")
 
 
+# MIME type mapping for documents
+MIME_TYPES = {
+    '.pdf': 'application/pdf',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.doc': 'application/msword',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.rtf': 'application/rtf',
+    '.odt': 'application/vnd.oasis.opendocument.text',
+}
+
+
 @app.post("/workspaces/{workspace_id}/upload")
 async def upload_file(
     workspace_id: str,
@@ -360,7 +373,7 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Upload a file and create a note from its content."""
+    """Upload a file and create a note from its content or store as document."""
     # Convert workspace_id to UUID
     try:
         ws_uuid = uuid.UUID(workspace_id)
@@ -389,12 +402,23 @@ async def upload_file(
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
         
-        # Extract text based on file type
+        # Create note based on file type
+        title = os.path.splitext(filename)[0]
+        
         if ext in SUPPORTED_DOCUMENT_EXTENSIONS:
-            # Document files - need special extraction
-            text_content = extract_text_from_document(content, ext)
+            # Document files - store as binary with preview capability
+            new_note = Note(
+                workspace_id=ws_uuid,
+                author_id=current_user.id,
+                title=title,
+                content=f"[Document: {filename}]",  # Placeholder content
+                file_data=content,
+                file_name=filename,
+                file_type=MIME_TYPES.get(ext, 'application/octet-stream'),
+                file_size=len(content)
+            )
         else:
-            # Text files - decode directly
+            # Text files - decode and store as text content
             try:
                 text_content = content.decode('utf-8')
             except UnicodeDecodeError:
@@ -402,20 +426,18 @@ async def upload_file(
                     text_content = content.decode('latin-1')
                 except:
                     raise HTTPException(status_code=400, detail="Could not decode file. Please ensure it's a text file.")
+            
+            new_note = Note(
+                workspace_id=ws_uuid,
+                author_id=current_user.id,
+                title=title,
+                content=text_content
+            )
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
     
-    # Create note from file
-    title = os.path.splitext(filename)[0]  # Use filename without extension as title
-    
-    new_note = Note(
-        workspace_id=ws_uuid,
-        author_id=current_user.id,
-        title=title,
-        content=text_content
-    )
     db.add(new_note)
     db.commit()
     db.refresh(new_note)
@@ -430,6 +452,9 @@ async def upload_file(
         'author_id': str(new_note.author_id),
         'created_at': new_note.created_at.isoformat() if new_note.created_at else None,
         'updated_at': new_note.updated_at.isoformat() if new_note.updated_at else None,
+        'file_name': new_note.file_name,
+        'file_type': new_note.file_type,
+        'file_size': new_note.file_size,
     }, room=f"workspace_{workspace_id}")
     
     return {
@@ -437,8 +462,70 @@ async def upload_file(
         "title": new_note.title,
         "content": new_note.content,
         "filename": filename,
-        "message": f"Successfully uploaded '{filename}' as a new note"
+        "is_document": ext in SUPPORTED_DOCUMENT_EXTENSIONS,
+        "file_type": new_note.file_type,
+        "file_size": new_note.file_size,
+        "message": f"Successfully uploaded '{filename}'"
     }
+
+
+from fastapi.responses import Response
+
+async def verify_token_and_get_user(token: str, db: Session) -> User:
+    """Verify a token string and return the associated user."""
+    payload = await verify_token(token)
+    auth0_id = payload.get("sub")
+    
+    if not auth0_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    
+    user = db.query(User).filter(User.auth0_id == auth0_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    
+    return user
+
+@app.get("/notes/{note_id}/file")
+async def get_note_file(
+    note_id: str,
+    token: str = Query(None, description="Auth token for direct access"),
+    current_user: User = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """Get the file content for a document note."""
+    # If token is provided as query param, use it for auth
+    if token and not current_user:
+        try:
+            current_user = await verify_token_and_get_user(token, db)
+        except HTTPException:
+            pass
+    
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        note_uuid = uuid.UUID(note_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid note ID")
+    
+    note = db.query(Note).filter(Note.id == note_uuid).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    
+    # Check workspace permission
+    check_workspace_permission(db, current_user, note.workspace_id, PERMISSION_VIEWER)
+    
+    if not note.file_data:
+        raise HTTPException(status_code=404, detail="No file attached to this note")
+    
+    return Response(
+        content=note.file_data,
+        media_type=note.file_type or 'application/octet-stream',
+        headers={
+            'Content-Disposition': f'inline; filename="{note.file_name or "document"}"',
+            'Content-Length': str(note.file_size or len(note.file_data))
+        }
+    )
 
 
 @app.post("/workspaces/{workspace_id}/upload-multiple")
@@ -448,7 +535,7 @@ async def upload_multiple_files(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Upload multiple files and create notes from their content."""
+    """Upload multiple files and create notes from their content or store as documents."""
     # Convert workspace_id to UUID
     try:
         ws_uuid = uuid.UUID(workspace_id)
@@ -478,30 +565,39 @@ async def upload_multiple_files(
                 errors.append({"filename": filename, "error": "File too large (max 10MB)"})
                 continue
             
-            # Extract text based on file type
-            try:
-                if ext in SUPPORTED_DOCUMENT_EXTENSIONS:
-                    text_content = extract_text_from_document(content, ext)
-                else:
-                    try:
-                        text_content = content.decode('utf-8')
-                    except UnicodeDecodeError:
-                        text_content = content.decode('latin-1')
-            except HTTPException as he:
-                errors.append({"filename": filename, "error": he.detail})
-                continue
-            except:
-                errors.append({"filename": filename, "error": "Could not extract text from file"})
-                continue
-            
-            # Create note
             title = os.path.splitext(filename)[0]
-            new_note = Note(
-                workspace_id=ws_uuid,
-                author_id=current_user.id,
-                title=title,
-                content=text_content
-            )
+            
+            # Handle based on file type
+            if ext in SUPPORTED_DOCUMENT_EXTENSIONS:
+                # Document files - store as binary
+                new_note = Note(
+                    workspace_id=ws_uuid,
+                    author_id=current_user.id,
+                    title=title,
+                    content=f"[Document: {filename}]",
+                    file_data=content,
+                    file_name=filename,
+                    file_type=MIME_TYPES.get(ext, 'application/octet-stream'),
+                    file_size=len(content)
+                )
+            else:
+                # Text files - decode and store
+                try:
+                    text_content = content.decode('utf-8')
+                except UnicodeDecodeError:
+                    try:
+                        text_content = content.decode('latin-1')
+                    except:
+                        errors.append({"filename": filename, "error": "Could not decode file"})
+                        continue
+                
+                new_note = Note(
+                    workspace_id=ws_uuid,
+                    author_id=current_user.id,
+                    title=title,
+                    content=text_content
+                )
+            
             db.add(new_note)
             db.commit()
             db.refresh(new_note)
@@ -516,6 +612,9 @@ async def upload_multiple_files(
                 'author_id': str(new_note.author_id),
                 'created_at': new_note.created_at.isoformat() if new_note.created_at else None,
                 'updated_at': new_note.updated_at.isoformat() if new_note.updated_at else None,
+                'file_name': new_note.file_name,
+                'file_type': new_note.file_type,
+                'file_size': new_note.file_size,
             }, room=f"workspace_{workspace_id}")
             
             results.append({
@@ -590,6 +689,10 @@ def serialize_note(item: Note):
         "author_id": item.author_id,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+        "file_name": item.file_name,
+        "file_type": item.file_type,
+        "file_size": item.file_size,
+        "is_document": item.file_data is not None,
     }
 
 
