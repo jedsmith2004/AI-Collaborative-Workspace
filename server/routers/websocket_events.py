@@ -28,6 +28,10 @@ def _serialise_note_db(note: Note):
         "workspace_id": str(note.workspace_id) if note.workspace_id else None,
         "created_at": note.created_at.isoformat() if note.created_at else None,
         "updated_at": note.updated_at.isoformat() if note.updated_at else None,
+        "file_name": note.file_name,
+        "file_type": note.file_type,
+        "file_size": note.file_size,
+        "is_document": note.file_data is not None,
     }
 
 def _coerce_note_id(raw_id) -> Optional[uuid.UUID]:

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Trash2, FileText } from 'lucide-react';
 import RemoteCursor from './RemoteCursor';
 import DocumentPreview from './DocumentPreview';
@@ -44,6 +44,17 @@ const NoteEditor: React.FC<NoteEditorProps> = ({
 }) => {
   // Check if the selected note is a document
   const isDocument = selectedNote?.is_document && selectedNote?.file_name && selectedNote?.file_type;
+
+  // Auto-resize textarea to fit content (like Google Docs)
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea && !isDocument) {
+      // Reset height to auto to get the correct scrollHeight
+      textarea.style.height = 'auto';
+      // Set height to scrollHeight to expand with content
+      textarea.style.height = `${Math.max(textarea.scrollHeight, 500)}px`;
+    }
+  }, [content, isDocument, textareaRef]);
 
   return (
     <main className="flex-1 overflow-y-auto bg-gray-900">
@@ -112,8 +123,9 @@ const NoteEditor: React.FC<NoteEditorProps> = ({
               onSelect={handleCursorMove}
               onClick={handleCursorMove}
               onKeyUp={handleCursorMove}
-              className="min-h-[500px] w-full resize-none bg-transparent text-[17px] leading-7 outline-none text-gray-200 placeholder-gray-600"
+              className="min-h-[500px] w-full resize-none bg-transparent text-[17px] leading-7 outline-none text-gray-200 placeholder-gray-600 overflow-hidden"
               placeholder="Start writing your notes here..."
+              style={{ height: 'auto' }}
             />
             {Object.entries(remoteCursors).map(([sid, cur]) => {
               if (cur.note_id !== selectedNote?.id) return null;
