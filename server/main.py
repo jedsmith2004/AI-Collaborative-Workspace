@@ -1,5 +1,6 @@
 print("=== STARTING main.py ===", flush=True)
 import uuid
+import io
 from typing import Optional, Union
 from datetime import datetime
 
@@ -263,7 +264,93 @@ async def ai_chat(
 
 # Supported file types for upload
 SUPPORTED_TEXT_EXTENSIONS = {'.txt', '.md', '.markdown', '.json', '.csv', '.xml', '.html', '.htm', '.py', '.js', '.ts', '.jsx', '.tsx', '.css', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.log', '.sql', '.sh', '.bat', '.ps1'}
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+SUPPORTED_DOCUMENT_EXTENSIONS = {'.pdf', '.docx', '.doc', '.rtf', '.odt', '.pptx', '.xlsx'}
+ALL_SUPPORTED_EXTENSIONS = SUPPORTED_TEXT_EXTENSIONS | SUPPORTED_DOCUMENT_EXTENSIONS
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB for documents
+
+
+def extract_text_from_pdf(content: bytes) -> str:
+    """Extract text from PDF file."""
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(io.BytesIO(content))
+        text_parts = []
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                text_parts.append(text)
+        return "\n\n".join(text_parts)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not extract text from PDF: {str(e)}")
+
+
+def extract_text_from_docx(content: bytes) -> str:
+    """Extract text from DOCX file."""
+    try:
+        import docx
+        doc = docx.Document(io.BytesIO(content))
+        text_parts = []
+        for para in doc.paragraphs:
+            if para.text.strip():
+                text_parts.append(para.text)
+        # Also extract from tables
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    if cell.text.strip():
+                        text_parts.append(cell.text)
+        return "\n\n".join(text_parts)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not extract text from DOCX: {str(e)}")
+
+
+def extract_text_from_pptx(content: bytes) -> str:
+    """Extract text from PPTX file."""
+    try:
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(content))
+        text_parts = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text.strip():
+                    text_parts.append(shape.text)
+        return "\n\n".join(text_parts)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not extract text from PPTX: {str(e)}")
+
+
+def extract_text_from_xlsx(content: bytes) -> str:
+    """Extract text from XLSX file."""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        text_parts = []
+        for sheet in wb.worksheets:
+            text_parts.append(f"## Sheet: {sheet.title}")
+            for row in sheet.iter_rows(values_only=True):
+                row_text = "\t".join(str(cell) if cell is not None else "" for cell in row)
+                if row_text.strip():
+                    text_parts.append(row_text)
+        return "\n".join(text_parts)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not extract text from XLSX: {str(e)}")
+
+
+def extract_text_from_document(content: bytes, ext: str) -> str:
+    """Extract text from document based on extension."""
+    if ext == '.pdf':
+        return extract_text_from_pdf(content)
+    elif ext in {'.docx', '.doc'}:
+        return extract_text_from_docx(content)
+    elif ext == '.pptx':
+        return extract_text_from_pptx(content)
+    elif ext == '.xlsx':
+        return extract_text_from_xlsx(content)
+    elif ext in {'.rtf', '.odt'}:
+        # For RTF and ODT, try basic text extraction or return error
+        raise HTTPException(status_code=400, detail=f"File type {ext} support coming soon. Please convert to PDF or DOCX.")
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported document type: {ext}")
 
 
 @app.post("/workspaces/{workspace_id}/upload")
@@ -288,10 +375,10 @@ async def upload_file(
     ext = os.path.splitext(filename)[1].lower()
     
     # Check file type
-    if ext not in SUPPORTED_TEXT_EXTENSIONS:
+    if ext not in ALL_SUPPORTED_EXTENSIONS:
         raise HTTPException(
             status_code=400, 
-            detail=f"Unsupported file type '{ext}'. Supported types: {', '.join(sorted(SUPPORTED_TEXT_EXTENSIONS))}"
+            detail=f"Unsupported file type '{ext}'. Supported types: {', '.join(sorted(ALL_SUPPORTED_EXTENSIONS))}"
         )
     
     # Read file content
@@ -300,16 +387,21 @@ async def upload_file(
         
         # Check file size
         if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=400, detail="File too large. Maximum size is 5MB.")
+            raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
         
-        # Decode content
-        try:
-            text_content = content.decode('utf-8')
-        except UnicodeDecodeError:
+        # Extract text based on file type
+        if ext in SUPPORTED_DOCUMENT_EXTENSIONS:
+            # Document files - need special extraction
+            text_content = extract_text_from_document(content, ext)
+        else:
+            # Text files - decode directly
             try:
-                text_content = content.decode('latin-1')
-            except:
-                raise HTTPException(status_code=400, detail="Could not decode file. Please ensure it's a text file.")
+                text_content = content.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    text_content = content.decode('latin-1')
+                except:
+                    raise HTTPException(status_code=400, detail="Could not decode file. Please ensure it's a text file.")
     except HTTPException:
         raise
     except Exception as e:
@@ -374,7 +466,7 @@ async def upload_multiple_files(
         ext = os.path.splitext(filename)[1].lower()
         
         # Check file type
-        if ext not in SUPPORTED_TEXT_EXTENSIONS:
+        if ext not in ALL_SUPPORTED_EXTENSIONS:
             errors.append({"filename": filename, "error": f"Unsupported file type '{ext}'"})
             continue
         
@@ -383,18 +475,24 @@ async def upload_multiple_files(
             
             # Check file size
             if len(content) > MAX_FILE_SIZE:
-                errors.append({"filename": filename, "error": "File too large (max 5MB)"})
+                errors.append({"filename": filename, "error": "File too large (max 10MB)"})
                 continue
             
-            # Decode content
+            # Extract text based on file type
             try:
-                text_content = content.decode('utf-8')
-            except UnicodeDecodeError:
-                try:
-                    text_content = content.decode('latin-1')
-                except:
-                    errors.append({"filename": filename, "error": "Could not decode file"})
-                    continue
+                if ext in SUPPORTED_DOCUMENT_EXTENSIONS:
+                    text_content = extract_text_from_document(content, ext)
+                else:
+                    try:
+                        text_content = content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        text_content = content.decode('latin-1')
+            except HTTPException as he:
+                errors.append({"filename": filename, "error": he.detail})
+                continue
+            except:
+                errors.append({"filename": filename, "error": "Could not extract text from file"})
+                continue
             
             # Create note
             title = os.path.splitext(filename)[0]

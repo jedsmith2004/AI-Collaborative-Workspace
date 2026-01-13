@@ -17,8 +17,8 @@ interface WorkspaceSidebarProps {
   token: string | null;
 }
 
-// Supported file types
-const ACCEPTED_EXTENSIONS = '.txt,.md,.markdown,.json,.csv,.xml,.html,.htm,.py,.js,.ts,.jsx,.tsx,.css,.yaml,.yml,.toml,.ini,.cfg,.log,.sql,.sh,.bat,.ps1';
+// Supported file types (text files + documents)
+const ACCEPTED_EXTENSIONS = '.txt,.md,.markdown,.json,.csv,.xml,.html,.htm,.py,.js,.ts,.jsx,.tsx,.css,.yaml,.yml,.toml,.ini,.cfg,.log,.sql,.sh,.bat,.ps1,.pdf,.docx,.doc,.pptx,.xlsx';
 
 const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
   sidebarOpen,
