@@ -1,13 +1,51 @@
-from sentence_transformers import SentenceTransformer
 import numpy as np
+import threading
 from typing import List, Dict
 from sqlalchemy.orm import Session
 from models.note import Note
 
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+# Lazy loading for the embedding model AND imports
+_embedding_model = None
+_SentenceTransformer = None
+_model_loading = False
+_model_lock = threading.Lock()
+
+def get_embedding_model():
+    """Lazily load the embedding model (and heavy imports)"""
+    global _embedding_model, _SentenceTransformer, _model_loading
+    
+    # Fast path - model already loaded
+    if _embedding_model is not None:
+        return _embedding_model
+    
+    with _model_lock:
+        # Double-check after acquiring lock
+        if _embedding_model is None:
+            print("Loading sentence-transformers model... (this may take a moment)", flush=True)
+            # Lazy import to avoid slow startup
+            from sentence_transformers import SentenceTransformer
+            _SentenceTransformer = SentenceTransformer
+            _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("Model loaded successfully!", flush=True)
+    return _embedding_model
+
+
+def preload_model_async():
+    """Start loading the model in a background thread.
+    Call this after server startup for faster first AI query."""
+    def _load():
+        try:
+            get_embedding_model()
+        except Exception as e:
+            print(f"Background model loading failed: {e}", flush=True)
+    
+    thread = threading.Thread(target=_load, daemon=True)
+    thread.start()
+    print("Started background model preloading...", flush=True)
 
 def get_note_embedding(text):
-    return embedding_model.encode(text, convert_to_numpy=True)
+    model = get_embedding_model()
+    return model.encode(text, convert_to_numpy=True)
 
 def cosine_sim(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))

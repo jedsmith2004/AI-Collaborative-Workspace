@@ -1,4 +1,5 @@
 import React from 'react';
+import { MessageSquare, Sparkles } from 'lucide-react';
 import LiveChatTab from './LiveChatTab';
 import AIAssistantTab from './AIAssistantTab';
 import type { ChatMessage } from '../../services/socket';
@@ -22,7 +23,7 @@ interface ChatPanelProps {
   setAiInput: (value: string) => void;
   handleSendAiMessage: () => void;
   isAiLoading: boolean;
-  onSourceClick: (noteId: number) => void;
+  onSourceClick: (noteId: string) => void;
 }
 
 const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -42,27 +43,29 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   onSourceClick
 }) => {
   return (
-    <aside className="flex w-80 flex-col border-l border-[#e6e6e6] bg-white/95 backdrop-blur-sm">
-      <div className="relative flex border-b border-[#e6e6e6] bg-[#f7f7f5]">
+    <aside className="flex w-80 flex-col border-l border-gray-700 bg-gray-800">
+      <div className="relative flex border-b border-gray-700 bg-gray-800/95 p-1">
         <div
-          className={`absolute inset-y-1 w-[50%] rounded-full bg-white shadow-sm transition-transform duration-200 ease-out ${
-            activeTab === 'chat' ? 'translate-x-1' : 'translate-x-[100%]'
+          className={`absolute inset-y-1 w-[calc(50%-4px)] rounded-lg bg-gray-700 transition-transform duration-200 ease-out ${
+            activeTab === 'chat' ? 'translate-x-1' : 'translate-x-[calc(100%+4px)]'
           }`}
         />
         <button
           onClick={() => setActiveTab('chat')}
-          className={`relative z-10 flex-1 bg-transparent px-4 py-3 text-xs font-semibold uppercase tracking-wide transition-colors duration-150 outline-none focus:outline-none focus-visible:outline-none active:outline-none hover:outline-none border-none focus:ring-0 ${
-            activeTab === 'chat' ? 'text-[#111827]' : 'text-[#9b9a97]'
+          className={`relative z-10 flex-1 flex items-center justify-center gap-2 bg-transparent px-4 py-2.5 text-xs font-semibold uppercase tracking-wide transition-colors duration-150 outline-none rounded-lg ${
+            activeTab === 'chat' ? 'text-white' : 'text-gray-500 hover:text-gray-300'
           }`}
         >
+          <MessageSquare size={14} />
           Live Chat
         </button>
         <button
           onClick={() => setActiveTab('ai')}
-          className={`relative z-10 flex-1 bg-transparent px-4 py-3 text-xs font-semibold uppercase tracking-wide transition-colors duration-150 outline-none focus:outline-none focus-visible:outline-none active:outline-none hover:outline-none border-none focus:ring-0 ${
-            activeTab === 'ai' ? 'text-[#111827]' : 'text-[#9b9a97]'
+          className={`relative z-10 flex-1 flex items-center justify-center gap-2 bg-transparent px-4 py-2.5 text-xs font-semibold uppercase tracking-wide transition-colors duration-150 outline-none rounded-lg ${
+            activeTab === 'ai' ? 'text-white' : 'text-gray-500 hover:text-gray-300'
           }`}
         >
+          <Sparkles size={14} />
           AI Assistant
         </button>
       </div>

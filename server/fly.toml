@@ -17,9 +17,10 @@ primary_region = 'lhr'
   processes = ['app']
 
 [[vm]]
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
 
 [env]
-  REDIS_HOST = "redis"  # Force Redis to be optional
+  REDIS_HOST = "redis"
+  PORT = "8000"

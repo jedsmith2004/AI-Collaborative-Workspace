@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import { Send, Sparkles } from 'lucide-react';
 import type { Components } from 'react-markdown';
 import type { Citation } from '../../api/ai';
 
@@ -16,14 +17,14 @@ interface AIAssistantTabProps {
   setAiInput: (value: string) => void;
   handleSendAiMessage: () => void;
   isAiLoading: boolean;
-  onSourceClick: (noteId: number) => void;
+  onSourceClick: (noteId: string) => void;
 }
 
 type CitationMap = Map<string, Citation>;
 
 function buildMarkdownComponents(
   citationMap?: CitationMap,
-  onCitationClick?: (noteId: number) => void
+  onCitationClick?: (noteId: string) => void
 ): Components {
   const withCitations = Boolean(citationMap && onCitationClick);
 
@@ -39,7 +40,7 @@ function buildMarkdownComponents(
       </p>
     ),
     strong: ({ children }) => (
-      <strong className="font-semibold text-purple-700">
+      <strong className="font-semibold text-indigo-300">
         {maybeRenderCitations(children)}
       </strong>
     ),
@@ -49,12 +50,12 @@ function buildMarkdownComponents(
       </em>
     ),
     code: ({ children }) => (
-      <code className="rounded bg-gray-200 px-1 py-0.5 text-xs font-mono text-gray-800">
+      <code className="rounded bg-gray-700 px-1 py-0.5 text-xs font-mono text-gray-200">
         {children}
       </code>
     ),
     pre: ({ children }) => (
-      <pre className="my-2 rounded bg-gray-800 p-2 text-white overflow-x-auto text-xs">
+      <pre className="my-2 rounded bg-gray-900 p-2 text-gray-200 overflow-x-auto text-xs">
         {children}
       </pre>
     ),
@@ -74,7 +75,7 @@ function buildMarkdownComponents(
       </li>
     ),
     blockquote: ({ children }) => (
-      <blockquote className="border-l-4 border-purple-400 pl-3 italic my-2 text-gray-700">
+      <blockquote className="border-l-4 border-indigo-400 pl-3 italic my-2 text-gray-300">
         {children}
       </blockquote>
     ),
@@ -99,7 +100,7 @@ function buildMarkdownComponents(
 function renderMessageWithCitations(
   content: string,
   citations: Citation[] | undefined,
-  onCitationClick: (noteId: number) => void
+  onCitationClick: (noteId: string) => void
 ) {
   const baseClass =
     'text-sm prose prose-sm max-w-none prose-p:my-1 prose-p:leading-relaxed prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0';
@@ -143,7 +144,7 @@ function renderMessageWithCitations(
 function applyCitationComponents(
   children: React.ReactNode,
   citationMap: CitationMap,
-  onCitationClick: (noteId: number) => void
+  onCitationClick: (noteId: string) => void
 ): React.ReactNode {
   if (typeof children === 'string') {
     const parts = children.split(/(\[CITE:\d+\])/);
@@ -158,7 +159,7 @@ function applyCitationComponents(
           <button
             key={`cite-${index}`}
             onClick={() => onCitationClick(citation.note_id)}
-            className="inline-flex items-center rounded bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-700 hover:bg-purple-200 transition-colors mx-0.5"
+            className="inline-flex items-center rounded bg-indigo-500/20 px-1.5 py-0.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/30 transition-colors mx-0.5"
             title={`Jump to: ${citation.title}`}
           >
             {citation.title}
@@ -193,39 +194,49 @@ const AIAssistantTab: React.FC<AIAssistantTabProps> = ({
     <>
       <div className="flex-1 overflow-y-auto p-4">
         <div className="space-y-3">
-          {aiMessages.map((msg, index) => {
-            const isUser = msg.role === 'user';
+          {aiMessages.length === 0 ? (
+            <div className="text-center text-gray-500 text-sm py-8">
+              <Sparkles size={32} className="mx-auto mb-2 opacity-50" />
+              <p>Ask AI about your notes</p>
+            </div>
+          ) : (
+            aiMessages.map((msg, index) => {
+              const isUser = msg.role === 'user';
 
-            return (
-              <div key={index}>
-                <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                  <div
-                    className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                      isUser ? 'bg-purple-500 text-white' : 'bg-[#f3f2ef] text-[#2f3437]'
-                    }`}
-                  >
-                    {isUser ? (
-                      <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
-                    ) : (
-                      renderMessageWithCitations(msg.content, msg.citations, onSourceClick)
-                    )}
+              return (
+                <div key={index}>
+                  <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                    <div
+                      className={`max-w-[90%] rounded-lg px-3 py-2 ${
+                        isUser ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-100'
+                      }`}
+                    >
+                      {isUser ? (
+                        <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+                      ) : (
+                        renderMessageWithCitations(msg.content, msg.citations, onSourceClick)
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
 
           {isAiLoading && (
             <div className="flex justify-start">
-              <div className="rounded-lg bg-[#f3f2ef] px-3 py-2 text-sm text-[#2f3437]">
-                <span className="animate-pulse">Thinking...</span>
+              <div className="rounded-lg bg-gray-700 px-3 py-2 text-sm text-gray-200">
+                <span className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+                  Thinking...
+                </span>
               </div>
             </div>
           )}
         </div>
       </div>
 
-      <div className="border-t border-[#e6e6e6] p-4">
+      <div className="border-t border-gray-700 p-4">
         <div className="flex gap-2">
           <input
             type="text"
@@ -234,14 +245,14 @@ const AIAssistantTab: React.FC<AIAssistantTabProps> = ({
             onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendAiMessage()}
             placeholder="Ask AI anything..."
             disabled={isAiLoading}
-            className="flex-1 rounded-lg border border-[#e3e2e0] px-3 py-2 text-sm outline-none bg-slate-100 focus:border-purple-400 disabled:opacity-50"
+            className="flex-1 rounded-lg border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-white placeholder-gray-400 outline-none focus:border-indigo-500 disabled:opacity-50"
           />
           <button
             onClick={handleSendAiMessage}
             disabled={isAiLoading}
-            className="rounded-lg bg-purple-500 px-4 py-2 text-sm text-white hover:bg-purple-600 disabled:opacity-50"
+            className="rounded-lg bg-indigo-600 hover:bg-indigo-700 px-3 py-2 text-white disabled:opacity-50 transition"
           >
-            Send
+            <Send size={18} />
           </button>
         </div>
       </div>

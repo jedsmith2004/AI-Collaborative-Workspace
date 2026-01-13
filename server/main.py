@@ -1,14 +1,41 @@
-from typing import Optional
+print("=== STARTING main.py ===", flush=True)
+import uuid
+from typing import Optional, Union
+from datetime import datetime
 
-from fastapi import FastAPI, Depends, HTTPException
+print("1. Importing FastAPI...", flush=True)
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+print("2. FastAPI imported. Importing CORS...", flush=True)
 from fastapi.middleware.cors import CORSMiddleware
+print("3. Importing SQLAlchemy...", flush=True)
 from sqlalchemy.orm import Session
+print("4. Importing db service...", flush=True)
 from services.db import get_db, engine, Base
-from services.rag_service import retrieve_relevant_notes, build_rag_context
+print("5. Importing rag_service...", flush=True)
+from services.rag_service import retrieve_relevant_notes, build_rag_context, preload_model_async
+print("6. Importing auth service...", flush=True)
+from services.auth import (
+    get_current_user, 
+    get_current_user_optional,
+    check_workspace_permission,
+    get_user_workspaces
+)
+print("7. Importing models...", flush=True)
 from models.note import Note
 from models.workspace import Workspace
+from models.user import User
+from models.workspace_collaborator import (
+    WorkspaceCollaborator, 
+    PERMISSION_VIEWER, 
+    PERMISSION_EDITOR, 
+    PERMISSION_OWNER
+)
 from models import user, workspace, note
+from models.workspace_collaborator import WorkspaceCollaborator as WC
+print("8. Importing routers...", flush=True)
 from routers.websocket_events import sio
+from routers.auth import router as auth_router
+from routers.collaborators import router as collaborators_router
 
 import socketio
 from pydantic import BaseModel
@@ -20,12 +47,24 @@ from re import finditer
 
 load_dotenv()
 
+print("Starting AI Colab Workspace API v2.0.0...", flush=True)
+print("Initializing database...", flush=True)
+
 try:
     Base.metadata.create_all(bind=engine)
+    print("Database initialized successfully!", flush=True)
 except Exception as e:
-    print(f"Could not create database tables on startup: {e}")
+    # This is usually fine - tables already exist
+    print(f"Note: Database tables already exist (this is OK): {type(e).__name__}", flush=True)
 
-app = FastAPI()
+print("Setting up FastAPI application...", flush=True)
+
+app = FastAPI(title="AI Colab Workspace API", version="2.0.0")
+
+@app.on_event("startup")
+async def startup_event():
+    """Preload heavy models in background after server starts."""
+    preload_model_async()
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,11 +74,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include routers
+app.include_router(auth_router)
+app.include_router(collaborators_router)
+
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class ChatRequest(BaseModel):
     message: str
-    workspace_id: int
+    workspace_id: str  # UUID as string
     conversation_history: list[dict] = []
     use_rag: bool = True
 
@@ -68,7 +111,17 @@ def extract_citations(message, relevant_notes):
     return citations
 
 @app.post("/ai/chat")
-def ai_chat(request: ChatRequest, db: Session = Depends(get_db)):
+async def ai_chat(
+    request: ChatRequest, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Convert workspace_id string to UUID
+    ws_uuid = uuid.UUID(request.workspace_id)
+    
+    # Check permission (viewers can use AI)
+    check_workspace_permission(db, current_user, ws_uuid, PERMISSION_VIEWER)
+    
     try:
         relevant_notes = []
         rag_context = ""
@@ -77,7 +130,7 @@ def ai_chat(request: ChatRequest, db: Session = Depends(get_db)):
         if request.use_rag:
             relevant_notes = retrieve_relevant_notes(
                 query=request.message,
-                workspace_id=request.workspace_id,
+                workspace_id=ws_uuid,
                 db=db,
                 top_n=3
             )
@@ -201,19 +254,226 @@ def ai_chat(request: ChatRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"AI chat error: {str(e)}")
 
 
+# Supported file types for upload
+SUPPORTED_TEXT_EXTENSIONS = {'.txt', '.md', '.markdown', '.json', '.csv', '.xml', '.html', '.htm', '.py', '.js', '.ts', '.jsx', '.tsx', '.css', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.log', '.sql', '.sh', '.bat', '.ps1'}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+
+
+@app.post("/workspaces/{workspace_id}/upload")
+async def upload_file(
+    workspace_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload a file and create a note from its content."""
+    # Convert workspace_id to UUID
+    try:
+        ws_uuid = uuid.UUID(workspace_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid workspace ID")
+    
+    # Check permission (need editor access to upload)
+    check_workspace_permission(db, current_user, ws_uuid, PERMISSION_EDITOR)
+    
+    # Get file extension
+    filename = file.filename or "uploaded_file"
+    ext = os.path.splitext(filename)[1].lower()
+    
+    # Check file type
+    if ext not in SUPPORTED_TEXT_EXTENSIONS:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported file type '{ext}'. Supported types: {', '.join(sorted(SUPPORTED_TEXT_EXTENSIONS))}"
+        )
+    
+    # Read file content
+    try:
+        content = await file.read()
+        
+        # Check file size
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="File too large. Maximum size is 5MB.")
+        
+        # Decode content
+        try:
+            text_content = content.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                text_content = content.decode('latin-1')
+            except:
+                raise HTTPException(status_code=400, detail="Could not decode file. Please ensure it's a text file.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
+    
+    # Create note from file
+    title = os.path.splitext(filename)[0]  # Use filename without extension as title
+    
+    new_note = Note(
+        workspace_id=ws_uuid,
+        author_id=current_user.id,
+        title=title,
+        content=text_content
+    )
+    db.add(new_note)
+    db.commit()
+    db.refresh(new_note)
+    
+    # Emit socket event to notify other users
+    from routers.websocket_events import sio
+    await sio.emit('note_created', {
+        'id': str(new_note.id),
+        'workspace_id': str(new_note.workspace_id),
+        'title': new_note.title,
+        'content': new_note.content,
+        'author_id': str(new_note.author_id),
+        'created_at': new_note.created_at.isoformat() if new_note.created_at else None,
+        'updated_at': new_note.updated_at.isoformat() if new_note.updated_at else None,
+    }, room=f"workspace_{workspace_id}")
+    
+    return {
+        "id": str(new_note.id),
+        "title": new_note.title,
+        "content": new_note.content,
+        "filename": filename,
+        "message": f"Successfully uploaded '{filename}' as a new note"
+    }
+
+
+@app.post("/workspaces/{workspace_id}/upload-multiple")
+async def upload_multiple_files(
+    workspace_id: str,
+    files: list[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload multiple files and create notes from their content."""
+    # Convert workspace_id to UUID
+    try:
+        ws_uuid = uuid.UUID(workspace_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid workspace ID")
+    
+    # Check permission (need editor access to upload)
+    check_workspace_permission(db, current_user, ws_uuid, PERMISSION_EDITOR)
+    
+    results = []
+    errors = []
+    
+    for file in files:
+        filename = file.filename or "uploaded_file"
+        ext = os.path.splitext(filename)[1].lower()
+        
+        # Check file type
+        if ext not in SUPPORTED_TEXT_EXTENSIONS:
+            errors.append({"filename": filename, "error": f"Unsupported file type '{ext}'"})
+            continue
+        
+        try:
+            content = await file.read()
+            
+            # Check file size
+            if len(content) > MAX_FILE_SIZE:
+                errors.append({"filename": filename, "error": "File too large (max 5MB)"})
+                continue
+            
+            # Decode content
+            try:
+                text_content = content.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    text_content = content.decode('latin-1')
+                except:
+                    errors.append({"filename": filename, "error": "Could not decode file"})
+                    continue
+            
+            # Create note
+            title = os.path.splitext(filename)[0]
+            new_note = Note(
+                workspace_id=ws_uuid,
+                author_id=current_user.id,
+                title=title,
+                content=text_content
+            )
+            db.add(new_note)
+            db.commit()
+            db.refresh(new_note)
+            
+            # Emit socket event
+            from routers.websocket_events import sio
+            await sio.emit('note_created', {
+                'id': str(new_note.id),
+                'workspace_id': str(new_note.workspace_id),
+                'title': new_note.title,
+                'content': new_note.content,
+                'author_id': str(new_note.author_id),
+                'created_at': new_note.created_at.isoformat() if new_note.created_at else None,
+                'updated_at': new_note.updated_at.isoformat() if new_note.updated_at else None,
+            }, room=f"workspace_{workspace_id}")
+            
+            results.append({
+                "id": str(new_note.id),
+                "title": new_note.title,
+                "filename": filename
+            })
+        except Exception as e:
+            errors.append({"filename": filename, "error": str(e)})
+    
+    return {
+        "uploaded": results,
+        "errors": errors,
+        "message": f"Uploaded {len(results)} file(s)" + (f", {len(errors)} failed" if errors else "")
+    }
+
+
 @app.get("/ping")
 def ping():
-    return {"message": "pong"}
+    return {"message": "pong", "version": "2.0.0"}
 
 
-def serialize_workspace(item: Workspace):
-    return {
+def serialize_workspace(item: Workspace, include_stats: bool = False, db: Session = None, user: User = None):
+    data = {
         "id": item.id,
         "name": item.name,
         "description": item.description,
+        "owner_id": item.owner_id,
+        "is_shared": item.is_shared,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
+    
+    if include_stats and db:
+        # Count notes
+        note_count = db.query(Note).filter(Note.workspace_id == item.id).count()
+        data["note_count"] = note_count
+        
+        # Count members (owner + collaborators)
+        member_count = db.query(WorkspaceCollaborator).filter(
+            WorkspaceCollaborator.workspace_id == item.id,
+            WorkspaceCollaborator.accepted_at.isnot(None)
+        ).count() + 1  # +1 for owner
+        data["member_count"] = member_count
+        
+        # Check user's role
+        if user:
+            if item.owner_id == user.id:
+                data["role"] = "owner"
+            else:
+                collab = db.query(WorkspaceCollaborator).filter(
+                    WorkspaceCollaborator.workspace_id == item.id,
+                    WorkspaceCollaborator.user_id == user.id
+                ).first()
+                if collab:
+                    if collab.permission_level == PERMISSION_EDITOR:
+                        data["role"] = "editor"
+                    else:
+                        data["role"] = "viewer"
+                else:
+                    data["role"] = "none"
+    
+    return data
 
 
 def serialize_note(item: Note):
@@ -222,15 +482,21 @@ def serialize_note(item: Note):
         "title": item.title,
         "content": item.content,
         "workspace_id": item.workspace_id,
+        "author_id": item.author_id,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
 
 
 @app.get("/workspaces/")
-def list_workspaces(db: Session = Depends(get_db)):
-    workspaces = db.query(Workspace).order_by(Workspace.created_at.desc()).all()
-    return [serialize_workspace(ws) for ws in workspaces]
+async def list_workspaces(
+    include_stats: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all workspaces the current user has access to"""
+    workspaces = get_user_workspaces(db, current_user)
+    return [serialize_workspace(ws, include_stats=include_stats, db=db, user=current_user) for ws in workspaces]
 
 
 class WorkspaceCreate(BaseModel):
@@ -238,9 +504,28 @@ class WorkspaceCreate(BaseModel):
     description: Optional[str] = ""
 
 
+class NoteCreate(BaseModel):
+    title: str
+    content: str = ""
+
+
+class NoteUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+
+
 @app.post("/workspaces/")
-def create_workspace(payload: WorkspaceCreate, db: Session = Depends(get_db)):
-    workspace = Workspace(name=payload.name, description=payload.description or "")
+async def create_workspace(
+    payload: WorkspaceCreate, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new workspace"""
+    workspace = Workspace(
+        name=payload.name, 
+        description=payload.description or "",
+        owner_id=current_user.id
+    )
     db.add(workspace)
     db.commit()
     db.refresh(workspace)
@@ -248,25 +533,188 @@ def create_workspace(payload: WorkspaceCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/workspaces/{workspace_id}")
-def get_workspace_detail(workspace_id: int, db: Session = Depends(get_db)):
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+async def get_workspace_detail(
+    workspace_id: str, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get workspace details"""
+    ws_uuid = uuid.UUID(workspace_id)
+    check_workspace_permission(db, current_user, ws_uuid, PERMISSION_VIEWER)
+    
+    workspace = db.query(Workspace).filter(Workspace.id == ws_uuid).first()
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    return serialize_workspace(workspace)
+    
+    return serialize_workspace(workspace, include_stats=True, db=db, user=current_user)
+
+
+@app.delete("/workspaces/{workspace_id}")
+async def delete_workspace(
+    workspace_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a workspace (owner only)"""
+    ws_uuid = uuid.UUID(workspace_id)
+    workspace = db.query(Workspace).filter(Workspace.id == ws_uuid).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    
+    if workspace.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the owner can delete this workspace")
+    
+    db.delete(workspace)
+    db.commit()
+    return {"message": "Workspace deleted"}
 
 
 @app.get("/workspaces/{workspace_id}/notes/")
-def list_workspace_notes(workspace_id: int, db: Session = Depends(get_db)):
+async def list_workspace_notes(
+    workspace_id: str, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all notes in a workspace"""
+    ws_uuid = uuid.UUID(workspace_id)
+    check_workspace_permission(db, current_user, ws_uuid, PERMISSION_VIEWER)
+    
     notes = (
         db.query(Note)
-        .filter(Note.workspace_id == workspace_id)
+        .filter(Note.workspace_id == ws_uuid)
         .order_by(Note.updated_at.desc())
         .all()
     )
     return [serialize_note(note) for note in notes]
 
+
+@app.post("/workspaces/{workspace_id}/notes/")
+async def create_note(
+    workspace_id: str,
+    payload: NoteCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new note in a workspace"""
+    ws_uuid = uuid.UUID(workspace_id)
+    check_workspace_permission(db, current_user, ws_uuid, PERMISSION_EDITOR)
+    
+    note = Note(
+        title=payload.title,
+        content=payload.content,
+        workspace_id=ws_uuid,
+        author_id=current_user.id
+    )
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    return serialize_note(note)
+
+
+@app.get("/notes/{note_id}")
+async def get_note(
+    note_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a specific note"""
+    note = db.query(Note).filter(Note.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    
+    check_workspace_permission(db, current_user, note.workspace_id, PERMISSION_VIEWER)
+    
+    return serialize_note(note)
+
+
+@app.put("/notes/{note_id}")
+async def update_note(
+    note_id: int,
+    payload: NoteUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update a note"""
+    note = db.query(Note).filter(Note.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    
+    check_workspace_permission(db, current_user, note.workspace_id, PERMISSION_EDITOR)
+    
+    if payload.title is not None:
+        note.title = payload.title
+    if payload.content is not None:
+        note.content = payload.content
+    
+    db.commit()
+    db.refresh(note)
+    return serialize_note(note)
+
+
+@app.delete("/notes/{note_id}")
+async def delete_note(
+    note_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a note (owner only)"""
+    note = db.query(Note).filter(Note.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    
+    workspace = db.query(Workspace).filter(Workspace.id == note.workspace_id).first()
+    if workspace.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only workspace owner can delete notes")
+    
+    db.delete(note)
+    db.commit()
+    return {"message": "Note deleted"}
+
+
+@app.get("/dashboard/stats")
+async def get_dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get dashboard statistics for current user"""
+    workspaces = get_user_workspaces(db, current_user)
+    workspace_count = len(workspaces)
+    
+    workspace_ids = [w.id for w in workspaces]
+    note_count = db.query(Note).filter(Note.workspace_id.in_(workspace_ids)).count() if workspace_ids else 0
+    
+    # Wrap collaborator queries in try-except since table might not exist
+    pending_invitations = 0
+    collaborator_count = 0
+    try:
+        pending_invitations = db.query(WorkspaceCollaborator).filter(
+            WorkspaceCollaborator.user_id == current_user.id,
+            WorkspaceCollaborator.accepted_at.is_(None)
+        ).count()
+        
+        for ws in workspaces:
+            if ws.owner_id == current_user.id:
+                collabs = db.query(WorkspaceCollaborator).filter(
+                    WorkspaceCollaborator.workspace_id == ws.id,
+                    WorkspaceCollaborator.accepted_at.isnot(None)
+                ).count()
+                collaborator_count += collabs
+    except Exception:
+        # Table might not exist yet
+        db.rollback()
+        pending_invitations = 0
+        collaborator_count = 0
+    
+    return {
+        "workspace_count": workspace_count,
+        "note_count": note_count,
+        "collaborator_count": collaborator_count,
+        "pending_invitations": pending_invitations
+    }
+
 socket_app = socketio.ASGIApp(sio, other_asgi_app=app)
 
 if __name__ == "__main__":
     import uvicorn
+    print("Starting uvicorn server on http://0.0.0.0:8000 ...")
     uvicorn.run("main:socket_app", host="0.0.0.0", port=8000, reload=True)

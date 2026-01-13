@@ -9,13 +9,13 @@ interface ChatMessage {
 
 interface ChatRequest {
   message: string;
-  workspace_id: number;
+  workspace_id: string;
   conversation_history: ChatMessage[];
   use_rag?: boolean;
 }
 
 interface NoteSource {
-  note_id: number;
+  note_id: string;
   title: string;
   content: string;
   similarity: number;
@@ -23,7 +23,7 @@ interface NoteSource {
 }
 
 interface Citation {
-    note_id: number;
+    note_id: string;
     title: string;
     position: number;
     match_text: string;
@@ -41,8 +41,16 @@ interface ChatResponse {
   citations?: Citation[];
 }
 
-export async function sendAIMessage(request: ChatRequest): Promise<ChatResponse> {
-  const response = await axios.post<ChatResponse>(`${API_URL}/ai/chat`, request);
+function authHeaders(token: string) {
+  return {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  };
+}
+
+export async function sendAIMessage(request: ChatRequest, token: string): Promise<ChatResponse> {
+  const response = await axios.post<ChatResponse>(`${API_URL}/ai/chat`, request, authHeaders(token));
   return response.data;
 }
 

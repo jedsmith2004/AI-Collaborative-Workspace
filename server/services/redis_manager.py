@@ -14,7 +14,6 @@ def get_redis_connection():
             socket_connect_timeout=2,
             socket_timeout=2,
         )
-        # Test connection
         redis.ping()
         return redis
     except Exception as e:

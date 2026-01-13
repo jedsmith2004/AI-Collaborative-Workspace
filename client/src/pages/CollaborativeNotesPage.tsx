@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import { socketService } from '../services/socket';
 import type { ChatMessage, Note } from '../services/socket';
 import type { Citation } from '../api/ai';
 import { getWorkspace, type Workspace } from '../api/workspaces';
+import { getCollaborators, type Collaborator } from '../api/auth';
 import { sendAIMessage } from '../api/ai';
 import { colorForSid, computeCaretCoordinates } from '../utils/cursorHelpers.ts';
 import WorkspaceSidebar from '../components/Sidebar/WorkspaceSidebar';
@@ -15,12 +17,10 @@ import NoteEditor from '../components/Editor/NoteEditor';
 export default function CollaborativeNotesPage() {
   const { workspaceId: workspaceParam } = useParams();
   const navigate = useNavigate();
+  const { token, user } = useAuth();
 
-  const workspaceId = useMemo(() => {
-    if (!workspaceParam) return null;
-    const parsed = Number(workspaceParam);
-    return Number.isFinite(parsed) ? parsed : null;
-  }, [workspaceParam]);
+  // Workspace IDs are now UUIDs (strings), not numbers
+  const workspaceId = workspaceParam || null;
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -37,16 +37,18 @@ export default function CollaborativeNotesPage() {
   const [aiMessages, setAiMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; sources?: any[]; citations?: Citation[]; }>>([]);
   const [aiInput, setAiInput] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+  const [isOwner, setIsOwner] = useState(false);
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const typingRef = useRef(false);
-  const selectedNoteIdRef = useRef<number | null>(null);
+  const selectedNoteIdRef = useRef<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const mirrorRef = useRef<HTMLDivElement | null>(null);
 
   const [remoteCursors, setRemoteCursors] = useState<Record<string, {
-    note_id: number;
+    note_id: string;
     start: number;
     end: number;
     x: number;
@@ -60,7 +62,9 @@ export default function CollaborativeNotesPage() {
 
   // Connect
   useEffect(() => {
-    const socket = socketService.connect();
+    if (!token) return;
+    
+    const socket = socketService.connect(undefined, token);
     const handleConnect = () => setSocketId(socketService.getSocketId());
     const handleDisconnect = () => setSocketId(null);
 
@@ -115,10 +119,10 @@ export default function CollaborativeNotesPage() {
       socket?.off('disconnect', handleDisconnect);
       socketService.disconnect();
     };
-  }, []);
+  }, [token]);
 
   const handleSendAiMessage = async () => {
-    if (!aiInput.trim() || !workspaceId) return;
+    if (!aiInput.trim() || !workspaceId || !token) return;
     
     const userMessage = aiInput.trim();
     setAiInput('');
@@ -133,7 +137,7 @@ export default function CollaborativeNotesPage() {
         message: userMessage,
         workspace_id: workspaceId,
         conversation_history: aiMessages.map(m => ({ role: m.role, content: m.content }))
-      });
+      }, token);
 
       // Add AI response to messages
       setAiMessages([...newMessages, { role: 'assistant', content: response.message, sources: response.sources, citations: response.citations }]);
@@ -145,7 +149,7 @@ export default function CollaborativeNotesPage() {
     }
   };
 
-  const handleSourceClick = (noteId: number) => {
+  const handleSourceClick = (noteId: string) => {
     const note = notes.find(n => n.id === noteId);
     if (note) {
       handleSelectNote(note);
@@ -156,6 +160,11 @@ export default function CollaborativeNotesPage() {
     setContent(newContent);
     typingRef.current = true;
     if (selectedNote) {
+      // Update the notes array and selectedNote locally for immediate feedback
+      const updatedNote = { ...selectedNote, content: newContent };
+      setNotes((prev) => prev.map((n) => (n.id === selectedNote.id ? updatedNote : n)));
+      setSelectedNote(updatedNote);
+      
       socketService.liveUpdate(selectedNote.id, newContent, title);
       if (e) {
         const start = e.target.selectionStart;
@@ -180,6 +189,11 @@ export default function CollaborativeNotesPage() {
   function handleUpdateTitle(newTitle: string) {
     setTitle(newTitle);
     if (selectedNote) {
+      // Update the notes array and selectedNote locally for immediate feedback
+      const updatedNote = { ...selectedNote, title: newTitle };
+      setNotes((prev) => prev.map((n) => (n.id === selectedNote.id ? updatedNote : n)));
+      setSelectedNote(updatedNote);
+      
       socketService.liveUpdate(selectedNote.id, content, newTitle);
     }
   }
@@ -187,31 +201,45 @@ export default function CollaborativeNotesPage() {
   // Get metadata
   useEffect(() => {
     if (workspaceId === null) {
-      navigate('/');
+      navigate('/workspaces');
       return;
     }
+    if (!token) return;
 
     let cancelled = false;
     setWorkspace(null);
     setIsLoadingNotes(true);
 
-    getWorkspace(workspaceId)
+    getWorkspace(workspaceId, token)
       .then((data) => {
         if (!cancelled) {
           setWorkspace(data);
+          // Check if current user is the owner
+          setIsOwner(data.owner_id === user?.id);
         }
       })
       .catch((error) => {
         console.error('Failed to load workspace', error);
         if (!cancelled) {
-          navigate('/');
+          navigate('/workspaces');
         }
+      });
+
+    // Load collaborators
+    getCollaborators(workspaceId, token)
+      .then((data) => {
+        if (!cancelled) {
+          setCollaborators(data);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load collaborators', error);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, navigate]);
+  }, [workspaceId, navigate, token, user?.id]);
 
   // Join workspace and listen
   useEffect(() => {
@@ -316,15 +344,20 @@ export default function CollaborativeNotesPage() {
     setMessageInput('');
   }, [messageInput]);
 
-  
+  const handleRefreshCollaborators = useCallback(() => {
+    if (!workspaceId || !token) return;
+    getCollaborators(workspaceId, token)
+      .then(setCollaborators)
+      .catch((error) => console.error('Failed to refresh collaborators', error));
+  }, [workspaceId, token]);
 
   const workspaceTitle = workspace?.name ?? 'Workspace';
 
   return (
-    <div className="flex h-screen bg-[#f7f6f3] text-[#2f3437]">
+    <div className="flex h-screen bg-gray-900 text-gray-100">
       {sidebarOpen && (
         <div
-          className="fixed inset-0 z-20 bg-black/30 backdrop-blur-sm md:hidden"
+          className="fixed inset-0 z-20 bg-black/50 backdrop-blur-sm md:hidden"
           onClick={() => setSidebarOpen(false)}
           aria-hidden="true"
         />
@@ -333,12 +366,14 @@ export default function CollaborativeNotesPage() {
       <WorkspaceSidebar
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
+        workspaceId={workspaceId || ''}
         workspaceTitle={workspaceTitle}
         handleCreateNote={handleCreateNote}
         isLoadingNotes={isLoadingNotes}
         notes={notes}
         selectedNote={selectedNote}
         handleSelectNote={handleSelectNote}
+        token={token}
       />
 
       {/* Main editor and chat */}
@@ -346,9 +381,13 @@ export default function CollaborativeNotesPage() {
         <WorkspaceHeader
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
+          workspaceId={workspaceId || ''}
           workspaceTitle={workspaceTitle}
           socketId={socketId}
           selectedNote={selectedNote}
+          collaborators={collaborators}
+          isOwner={isOwner}
+          onCollaboratorsChange={handleRefreshCollaborators}
         />
 
         <div className="flex flex-1 overflow-hidden">

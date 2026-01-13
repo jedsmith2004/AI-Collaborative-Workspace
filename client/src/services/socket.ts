@@ -1,10 +1,10 @@
 import { io, Socket } from 'socket.io-client';
 
 interface Note {
-  id: number;
+  id: string;
   title: string;
   content: string;
-  workspace_id?: number;
+  workspace_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -13,6 +13,8 @@ interface ChatMessage {
   sid: string | null;
   content: string;
   timestamp?: string | null;
+  user_name?: string;
+  user_id?: number;
 }
 
 interface CursorPayload {
@@ -23,17 +25,25 @@ interface CursorPayload {
 class SocketService {
   private socket: Socket | null = null;
   private workspaceId: string | null = null;
+  private token: string | null = null;
 
-  connect(url?: string) {
+  connect(url?: string, token?: string) {
     if (this.socket) {
-      return this.socket;
+      // If reconnecting with a new token, disconnect first
+      if (token && this.token !== token) {
+        this.disconnect();
+      } else {
+        return this.socket;
+      }
     }
 
+    this.token = token || null;
     const backendUrl = url || import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 
     this.socket = io(backendUrl, {
       transports: ['websocket'],
       autoConnect: true,
+      auth: token ? { token } : undefined,
     });
 
     this.socket.on('connect', () => {
@@ -42,6 +52,10 @@ class SocketService {
 
     this.socket.on('disconnect', () => {
       console.log('Disconnected from server');
+    });
+
+    this.socket.on('auth_error', (data) => {
+      console.error('Socket authentication error:', data.message);
     });
 
     return this.socket;
@@ -61,7 +75,7 @@ class SocketService {
     });
   }
 
-  updateNote(noteId: number, title?: string, content?: string) {
+  updateNote(noteId: string, title?: string, content?: string) {
     if (!this.workspaceId) return;
     this.socket?.emit('update_note', {
       workspace_id: this.workspaceId,
@@ -71,7 +85,7 @@ class SocketService {
     });
   }
 
-  deleteNote(noteId: number) {
+  deleteNote(noteId: string) {
     if (!this.workspaceId) return;
     this.socket?.emit('delete_note', {
       workspace_id: this.workspaceId,
@@ -79,7 +93,7 @@ class SocketService {
     });
   }
 
-  liveUpdate(noteId: number, content: string, title?: string) {
+  liveUpdate(noteId: string, content: string, title?: string) {
     if (!this.workspaceId) return;
     this.socket?.emit("note_live_update", {
       note_id: noteId,
@@ -89,7 +103,7 @@ class SocketService {
     });
   }
 
-  sendCursorUpdate(noteId: number, cursor: CursorPayload, selection?: any) {
+  sendCursorUpdate(noteId: string, cursor: CursorPayload, selection?: any) {
     if (!this.workspaceId) return;
     this.socket?.emit("cursor_update", {
       note_id: noteId,
@@ -110,7 +124,7 @@ class SocketService {
     return () => this.socket?.off('note_created', callback);
   }
 
-  onNoteLiveUpdate(callback: (data: { note_id: number; content: string; title?: string; sid?: string }) => void) {
+  onNoteLiveUpdate(callback: (data: { note_id: string; content: string; title?: string; sid?: string }) => void) {
     this.socket?.on("note_live_update", callback);
   }
 
@@ -119,7 +133,7 @@ class SocketService {
     return () => this.socket?.off('note_updated', callback);
   }
 
-  onCursorUpdate(cb: (data: { sid: string; note_id: number; cursor: CursorPayload; selection?: any }) => void) {
+  onCursorUpdate(cb: (data: { sid: string; note_id: string; cursor: CursorPayload; selection?: any }) => void) {
     this.socket?.on("cursor_update", cb);
   }
 
@@ -128,7 +142,7 @@ class SocketService {
     return () => this.socket?.off("user_disconnected", callback);
   }
 
-  onNoteDeleted(callback: (data: { id: number }) => void) {
+  onNoteDeleted(callback: (data: { id: string }) => void) {
     this.socket?.on('note_deleted', callback);
     return () => this.socket?.off('note_deleted', callback);
   }
@@ -161,7 +175,12 @@ class SocketService {
       this.socket.disconnect();
       this.socket = null;
       this.workspaceId = null;
+      this.token = null;
     }
+  }
+
+  setToken(token: string | null) {
+    this.token = token;
   }
 }
 

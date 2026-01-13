@@ -1,9 +1,10 @@
 import React from 'react';
+import { Trash2, FileText } from 'lucide-react';
 import RemoteCursor from './RemoteCursor';
 import type { Note } from '../../services/socket';
 
 interface RemoteCursorData {
-  note_id: number;
+  note_id: string;
   start: number;
   end: number;
   x: number;
@@ -37,7 +38,7 @@ const NoteEditor: React.FC<NoteEditorProps> = ({
   remoteCursors,
 }) => {
   return (
-    <main className="flex-1 overflow-y-auto">
+    <main className="flex-1 overflow-y-auto bg-gray-900">
       {selectedNote ? (
         <div className="mx-auto flex max-w-4xl flex-col px-10 py-12">
           <div className="flex items-center justify-between">
@@ -45,19 +46,16 @@ const NoteEditor: React.FC<NoteEditorProps> = ({
               type="text"
               value={title}
               onChange={(e) => handleUpdateTitle(e.target.value)}
-              className="w-full bg-transparent text-4xl font-semibold tracking-tight outline-none"
+              className="w-full bg-transparent text-4xl font-semibold tracking-tight outline-none text-white placeholder-gray-600"
               placeholder="Untitled"
             />
             <button
               onClick={handleDeleteNote}
-              className="ml-4 rounded-md border border-transparent bg-[#fee4e2] px-3 py-1.5 text-sm text-[#b42318] hover:bg-[#fdd1ce]"
+              className="ml-4 flex items-center gap-1.5 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/20 transition"
             >
+              <Trash2 size={14} />
               Delete
             </button>
-          </div>
-          <div className="mt-3 flex items-center gap-3 text-sm text-[#9b9a97]">
-            <button className="rounded-md border border-transparent px-2 py-1 hover:bg-[#f3f2ef]">Add icon</button>
-            <button className="rounded-md border border-transparent px-2 py-1 hover:bg-[#f3f2ef]">Add cover</button>
           </div>
           <div className="relative mt-8">
             <div
@@ -80,8 +78,8 @@ const NoteEditor: React.FC<NoteEditorProps> = ({
               onSelect={handleCursorMove}
               onClick={handleCursorMove}
               onKeyUp={handleCursorMove}
-              className="min-h-[500px] w-full resize-none bg-transparent text-[17px] leading-7 outline-none"
-              placeholder="Type '/' for commands"
+              className="min-h-[500px] w-full resize-none bg-transparent text-[17px] leading-7 outline-none text-gray-200 placeholder-gray-600"
+              placeholder="Start writing your notes here..."
             />
             {Object.entries(remoteCursors).map(([sid, cur]) => {
               if (cur.note_id !== selectedNote?.id) return null;
@@ -98,8 +96,9 @@ const NoteEditor: React.FC<NoteEditorProps> = ({
           </div>
         </div>
       ) : (
-        <div className="flex h-full items-center justify-center text-[#9b9a97]">
-          Select or create a page to get started.
+        <div className="flex h-full flex-col items-center justify-center text-gray-500">
+          <FileText size={48} className="mb-4 opacity-50" />
+          <p>Select or create a page to get started.</p>
         </div>
       )}
     </main>
