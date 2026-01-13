@@ -66,9 +66,16 @@ async def startup_event():
     """Preload heavy models in background after server starts."""
     preload_model_async()
 
+# CORS configuration - explicit origins required when using credentials
+cors_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://workspace.jacksmith.me",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
