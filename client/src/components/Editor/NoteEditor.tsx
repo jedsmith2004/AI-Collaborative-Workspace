@@ -1,7 +1,8 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { Trash2, FileText } from 'lucide-react';
 import RemoteCursor from './RemoteCursor';
 import DocumentPreview from './DocumentPreview';
+import RichTextEditor from './RichTextEditor';
 import type { Note } from '../../services/socket';
 
 interface RemoteCursorData {
@@ -21,7 +22,7 @@ interface NoteEditorProps {
   mirrorRef: React.RefObject<HTMLDivElement>;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
   content: string;
-  handleUpdateContent: (value: string, e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  handleUpdateContent: (value: string, e?: React.ChangeEvent<HTMLTextAreaElement>) => void;
   handleCursorMove: (e: React.SyntheticEvent<HTMLTextAreaElement>) => void;
   remoteCursors: Record<string, RemoteCursorData>;
   apiUrl: string;
@@ -33,28 +34,22 @@ const NoteEditor: React.FC<NoteEditorProps> = ({
   title,
   handleUpdateTitle,
   handleDeleteNote,
-  mirrorRef,
-  textareaRef,
+  mirrorRef: _mirrorRef,
+  textareaRef: _textareaRef,
   content,
   handleUpdateContent,
-  handleCursorMove,
+  handleCursorMove: _handleCursorMove,
   remoteCursors,
   apiUrl,
   token,
 }) => {
+  // Note: mirrorRef, textareaRef, handleCursorMove are kept for API compatibility
+  // but not used with the rich text editor
+  void _mirrorRef;
+  void _textareaRef;
+  void _handleCursorMove;
   // Check if the selected note is a document
   const isDocument = selectedNote?.is_document && selectedNote?.file_name && selectedNote?.file_type;
-
-  // Auto-resize textarea to fit content (like Google Docs)
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (textarea && !isDocument) {
-      // Reset height to auto to get the correct scrollHeight
-      textarea.style.height = 'auto';
-      // Set height to scrollHeight to expand with content
-      textarea.style.height = `${Math.max(textarea.scrollHeight, 500)}px`;
-    }
-  }, [content, isDocument, textareaRef]);
 
   return (
     <main className="flex-1 overflow-y-auto bg-gray-900">
@@ -80,13 +75,14 @@ const NoteEditor: React.FC<NoteEditorProps> = ({
                 fileSize={selectedNote.file_size || 0}
                 apiUrl={apiUrl}
                 token={token}
+                extractedText={content}
               />
             </div>
           </div>
         ) : (
-          /* Normal Text Editor Mode */
+          /* Rich Text Editor Mode */
         <div className="mx-auto flex max-w-4xl flex-col px-10 py-12">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mb-6">
             <input
               type="text"
               value={title}
@@ -102,31 +98,13 @@ const NoteEditor: React.FC<NoteEditorProps> = ({
               Delete
             </button>
           </div>
-          <div className="relative mt-8">
-            <div
-              ref={mirrorRef}
-              aria-hidden
-              style={{
-                position: 'absolute',
-                visibility: 'hidden',
-                pointerEvents: 'none',
-                whiteSpace: 'pre-wrap',
-                wordWrap: 'break-word',
-                top: 0,
-                left: 0,
-              }}
-            />
-            <textarea
-              ref={textareaRef}
-              value={content}
-              onChange={(e) => handleUpdateContent(e.target.value, e)}
-              onSelect={handleCursorMove}
-              onClick={handleCursorMove}
-              onKeyUp={handleCursorMove}
-              className="min-h-[500px] w-full resize-none bg-transparent text-[17px] leading-7 outline-none text-gray-200 placeholder-gray-600 overflow-hidden"
+          <div className="relative">
+            <RichTextEditor
+              content={content}
+              onChange={(newContent) => handleUpdateContent(newContent)}
               placeholder="Start writing your notes here..."
-              style={{ height: 'auto' }}
             />
+            {/* Remote cursors - note: these won't work perfectly with rich text yet */}
             {Object.entries(remoteCursors).map(([sid, cur]) => {
               if (cur.note_id !== selectedNote?.id) return null;
               return (

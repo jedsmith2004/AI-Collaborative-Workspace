@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FileText, Download, ExternalLink, File, FileSpreadsheet, Presentation } from 'lucide-react';
+import { FileText, Download, ExternalLink, File, FileSpreadsheet, Presentation, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface DocumentPreviewProps {
   noteId: string;
@@ -8,6 +8,7 @@ interface DocumentPreviewProps {
   fileSize: number;
   apiUrl: string;
   token: string;
+  extractedText?: string;
 }
 
 const formatFileSize = (bytes: number): string => {
@@ -31,9 +32,11 @@ const DocumentPreview: React.FC<DocumentPreviewProps> = ({
   fileSize,
   apiUrl,
   token,
+  extractedText,
 }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showExtractedText, setShowExtractedText] = useState(false);
   
   const fileUrl = `${apiUrl}/notes/${noteId}/file?token=${encodeURIComponent(token)}`;
   const isPdf = fileType.includes('pdf');
@@ -130,8 +133,8 @@ const DocumentPreview: React.FC<DocumentPreviewProps> = ({
           </div>
         ) : (
           /* Non-PDF Document Preview */
-          <div className="h-full flex items-center justify-center">
-            <div className="text-center p-8 max-w-md">
+          <div className="h-full overflow-y-auto">
+            <div className="text-center p-8 max-w-md mx-auto">
               {getFileIcon(fileType)}
               <h3 className="text-white text-xl font-medium mt-4 mb-2">{fileName}</h3>
               <p className="text-gray-400 mb-6">
@@ -154,6 +157,24 @@ const DocumentPreview: React.FC<DocumentPreviewProps> = ({
                 </button>
               </div>
             </div>
+            
+            {/* Extracted Text Content */}
+            {extractedText && !extractedText.startsWith('[Document:') && (
+              <div className="border-t border-[#313244] p-6">
+                <button
+                  onClick={() => setShowExtractedText(!showExtractedText)}
+                  className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-4"
+                >
+                  {showExtractedText ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  <span>Extracted Text Content (searchable by AI)</span>
+                </button>
+                {showExtractedText && (
+                  <div className="bg-[#181825] rounded-lg p-4 max-h-96 overflow-y-auto">
+                    <pre className="text-gray-300 whitespace-pre-wrap text-sm font-mono">{extractedText}</pre>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -406,12 +406,19 @@ async def upload_file(
         title = os.path.splitext(filename)[0]
         
         if ext in SUPPORTED_DOCUMENT_EXTENSIONS:
-            # Document files - store as binary with preview capability
+            # Document files - extract text for RAG and store binary for preview
+            try:
+                extracted_text = extract_text_from_document(content, ext)
+            except HTTPException:
+                extracted_text = f"[Document: {filename}] - Text extraction failed"
+            except Exception as e:
+                extracted_text = f"[Document: {filename}] - Text extraction failed: {str(e)}"
+            
             new_note = Note(
                 workspace_id=ws_uuid,
                 author_id=current_user.id,
                 title=title,
-                content=f"[Document: {filename}]",  # Placeholder content
+                content=extracted_text,  # Extracted text for RAG search
                 file_data=content,
                 file_name=filename,
                 file_type=MIME_TYPES.get(ext, 'application/octet-stream'),
@@ -569,12 +576,19 @@ async def upload_multiple_files(
             
             # Handle based on file type
             if ext in SUPPORTED_DOCUMENT_EXTENSIONS:
-                # Document files - store as binary
+                # Document files - extract text for RAG and store binary for preview
+                try:
+                    extracted_text = extract_text_from_document(content, ext)
+                except HTTPException:
+                    extracted_text = f"[Document: {filename}] - Text extraction failed"
+                except Exception as e:
+                    extracted_text = f"[Document: {filename}] - Text extraction failed: {str(e)}"
+                
                 new_note = Note(
                     workspace_id=ws_uuid,
                     author_id=current_user.id,
                     title=title,
-                    content=f"[Document: {filename}]",
+                    content=extracted_text,  # Extracted text for RAG search
                     file_data=content,
                     file_name=filename,
                     file_type=MIME_TYPES.get(ext, 'application/octet-stream'),
